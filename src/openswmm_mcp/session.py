@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 from openswmm.engine import EngineState, OutputReader, Solver
 
 from openswmm_mcp.errors import ErrorCode, ToolError, engine_error
+from openswmm_mcp.metrics import SessionMetrics, measured, op_label
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -39,6 +40,8 @@ class SimSession:
     structure_edited: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     readers: dict[str, Any] = field(default_factory=dict, repr=False)
+    # What this session has cost so far; every engine call lands in it via ``call``.
+    metrics: SessionMetrics = field(default_factory=SessionMetrics, repr=False)
 
     @property
     def state(self) -> str:
@@ -62,9 +65,13 @@ class SimSession:
 
         A cancelled request still waits for the worker to finish before the lock
         is released, so no other call can touch the engine while it is busy.
+        The worker is wrapped so its CPU, wall and memory cost lands in
+        :attr:`metrics`, measured inside the thread that does the work.
         """
         async with self.lock:
-            work = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kw))
+            work = asyncio.ensure_future(
+                asyncio.to_thread(measured(self.metrics, op_label(fn, context), fn), *args, **kw)
+            )
             try:
                 return await asyncio.shield(work)
             except asyncio.CancelledError:

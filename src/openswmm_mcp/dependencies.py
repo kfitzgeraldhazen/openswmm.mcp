@@ -72,14 +72,33 @@ def toolsets(settings: ServerSettings) -> set[str]:
     return {"core"} | {t.strip() for t in settings.toolsets.split(",") if t.strip()}
 
 
+def _lifespan_states(ctx: Context) -> list[Any]:
+    """Everywhere the root server's lifespan state might live, nearest first.
+
+    Resources and prompts are mounted sub-servers. From FastMCP 4 onwards their
+    ``ctx.lifespan_context`` is the *sub-server's* own (empty) state, and the
+    root server's -- the one holding the session manager -- is reachable only
+    through the request context. Both are tried, so either version works.
+    """
+    states = []
+    for read in (lambda: ctx.lifespan_context, lambda: ctx.request_context.lifespan_context):
+        try:
+            states.append(read())
+        except Exception:  # no request in flight, or no such attribute
+            pass
+    return states
+
+
 def _lifespan_item(ctx: Context, key: str) -> Any:
-    try:
-        return ctx.lifespan_context[key]
-    except (KeyError, TypeError) as exc:
-        raise ToolError(
-            f"[{ErrorCode.NOT_SUPPORTED}] '{key}' is not available; the server "
-            "was started without the toolset that provides it."
-        ) from exc
+    for state in _lifespan_states(ctx):
+        try:
+            return state[key]
+        except (KeyError, TypeError):
+            continue
+    raise ToolError(
+        f"[{ErrorCode.NOT_SUPPORTED}] '{key}' is not available; the server "
+        "was started without the toolset that provides it."
+    )
 
 
 def get_session_manager(ctx: Context) -> SessionManager:

@@ -1,0 +1,214 @@
+[1mdiff --git a/pyproject.toml b/pyproject.toml[m
+[1mindex 18455a3..acedb68 100644[m
+[1m--- a/pyproject.toml[m
+[1m+++ b/pyproject.toml[m
+[36m@@ -36,10 +36,16 @@[m [mdependencies = [[m
+ gym = [[m
+     "openswmm.gymnasium[spec]",[m
+ ][m
+[32m+[m[32m# Resident memory and the user/system CPU split in swmm://metrics. Without it the[m
+[32m+[m[32m# metrics fall back to the stdlib clocks, which cover CPU and wall time but not memory.[m
+[32m+[m[32mmetrics = [[m
+[32m+[m[32m    "psutil>=5.9",[m
+[32m+[m[32m][m
+ dev = [[m
+     "pytest>=7.0",[m
+     "pytest-asyncio>=0.21",[m
+     "pytest-cov",[m
+[32m+[m[32m    "psutil>=5.9",[m
+     "ruff==0.15.14",[m
+ ][m
+ docs = [[m
+[1mdiff --git a/src/openswmm_mcp/dependencies.py b/src/openswmm_mcp/dependencies.py[m
+[1mindex d29eb57..b5b97d4 100644[m
+[1m--- a/src/openswmm_mcp/dependencies.py[m
+[1m+++ b/src/openswmm_mcp/dependencies.py[m
+[36m@@ -72,14 +72,33 @@[m [mdef toolsets(settings: ServerSettings) -> set[str]:[m
+     return {"core"} | {t.strip() for t in settings.toolsets.split(",") if t.strip()}[m
+ [m
+ [m
+[32m+[m[32mdef _lifespan_states(ctx: Context) -> list[Any]:[m
+[32m+[m[32m    """Everywhere the root server's lifespan state might live, nearest first.[m
+[32m+[m
+[32m+[m[32m    Resources and prompts are mounted sub-servers. From FastMCP 4 onwards their[m
+[32m+[m[32m    ``ctx.lifespan_context`` is the *sub-server's* own (empty) state, and the[m
+[32m+[m[32m    root server's -- the one holding the session manager -- is reachable only[m
+[32m+[m[32m    through the request context. Both are tried, so either version works.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    states = [][m
+[32m+[m[32m    for read in (lambda: ctx.lifespan_context, lambda: ctx.request_context.lifespan_context):[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            states.append(read())[m
+[32m+[m[32m        except Exception:  # no request in flight, or no such attribute[m
+[32m+[m[32m            pass[m
+[32m+[m[32m    return states[m
+[32m+[m
+[32m+[m
+ def _lifespan_item(ctx: Context, key: str) -> Any:[m
+[31m-    try:[m
+[31m-        return ctx.lifespan_context[key][m
+[31m-    except (KeyError, TypeError) as exc:[m
+[31m-        raise ToolError([m
+[31m-            f"[{ErrorCode.NOT_SUPPORTED}] '{key}' is not available; the server "[m
+[31m-            "was started without the toolset that provides it."[m
+[31m-        ) from exc[m
+[32m+[m[32m    for state in _lifespan_states(ctx):[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            return state[key][m
+[32m+[m[32m        except (KeyError, TypeError):[m
+[32m+[m[32m            continue[m
+[32m+[m[32m    raise ToolError([m
+[32m+[m[32m        f"[{ErrorCode.NOT_SUPPORTED}] '{key}' is not available; the server "[m
+[32m+[m[32m        "was started without the toolset that provides it."[m
+[32m+[m[32m    )[m
+ [m
+ [m
+ def get_session_manager(ctx: Context) -> SessionManager:[m
+[1mdiff --git a/src/openswmm_mcp/resources.py b/src/openswmm_mcp/resources.py[m
+[1mindex be17dce..c90b9b1 100644[m
+[1m--- a/src/openswmm_mcp/resources.py[m
+[1m+++ b/src/openswmm_mcp/resources.py[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-"""MCP resources: the engine catalog and live session summaries (``swmm://`` URIs)."""[m
+[32m+[m[32m"""MCP resources: the engine catalog, live session summaries and cost (``swmm://`` URIs)."""[m
+ [m
+ from __future__ import annotations[m
+ [m
+[36m@@ -8,6 +8,7 @@[m [mfrom fastmcp import Context, FastMCP[m
+ [m
+ from openswmm_mcp import catalog as cat[m
+ from openswmm_mcp.dependencies import get_session, get_session_manager[m
+[32m+[m[32mfrom openswmm_mcp.metrics import COST_NOTE, process_snapshot[m
+ from openswmm_mcp.tools.model import summary[m
+ [m
+ resources_mcp = FastMCP("resources")[m
+[36m@@ -48,3 +49,27 @@[m [masync def session_summary(session_id: str, ctx: Context) -> str:[m
+     """Counts, key options, time window and file paths for one session."""[m
+     session = await get_session(ctx, session_id)[m
+     return json.dumps(await session.call(summary, session), indent=1)[m
+[32m+[m
+[32m+[m
+[32m+[m[32m@resources_mcp.resource("swmm://metrics")[m
+[32m+[m[32masync def metrics(ctx: Context) -> str:[m
+[32m+[m[32m    """CPU, wall time and memory used by the server process and by each open session."""[m
+[32m+[m[32m    sessions = await get_session_manager(ctx).sessions()[m
+[32m+[m[32m    return json.dumps([m
+[32m+[m[32m        {[m
+[32m+[m[32m            "process": process_snapshot(),[m
+[32m+[m[32m            "sessions": {s.session_id: s.metrics.as_dict() for s in sessions},[m
+[32m+[m[32m            "note": COST_NOTE,[m
+[32m+[m[32m        },[m
+[32m+[m[32m        indent=1,[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m
+[32m+[m[32m@resources_mcp.resource("swmm://session/{session_id}/cost")[m
+[32m+[m[32masync def session_cost(session_id: str, ctx: Context) -> str:[m
+[32m+[m[32m    """One session's CPU, wall time and memory cost, broken down by operation."""[m
+[32m+[m[32m    session = await get_session(ctx, session_id)[m
+[32m+[m[32m    return json.dumps([m
+[32m+[m[32m        {"session_id": session_id, **session.metrics.as_dict(by_op=True), "note": COST_NOTE},[m
+[32m+[m[32m        indent=1,[m
+[32m+[m[32m    )[m
+[1mdiff --git a/src/openswmm_mcp/session.py b/src/openswmm_mcp/session.py[m
+[1mindex 62e25d3..02a4945 100644[m
+[1m--- a/src/openswmm_mcp/session.py[m
+[1m+++ b/src/openswmm_mcp/session.py[m
+[36m@@ -18,6 +18,7 @@[m [mfrom typing import Any, TypeVar[m
+ from openswmm.engine import EngineState, OutputReader, Solver[m
+ [m
+ from openswmm_mcp.errors import ErrorCode, ToolError, engine_error[m
+[32m+[m[32mfrom openswmm_mcp.metrics import SessionMetrics, measured, op_label[m
+ [m
+ logger = logging.getLogger(__name__)[m
+ T = TypeVar("T")[m
+[36m@@ -39,6 +40,8 @@[m [mclass SimSession:[m
+     structure_edited: bool = False[m
+     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)[m
+     readers: dict[str, Any] = field(default_factory=dict, repr=False)[m
+[32m+[m[32m    # What this session has cost so far; every engine call lands in it via ``call``.[m
+[32m+[m[32m    metrics: SessionMetrics = field(default_factory=SessionMetrics, repr=False)[m
+ [m
+     @property[m
+     def state(self) -> str:[m
+[36m@@ -62,9 +65,13 @@[m [mclass SimSession:[m
+ [m
+         A cancelled request still waits for the worker to finish before the lock[m
+         is released, so no other call can touch the engine while it is busy.[m
+[32m+[m[32m        The worker is wrapped so its CPU, wall and memory cost lands in[m
+[32m+[m[32m        :attr:`metrics`, measured inside the thread that does the work.[m
+         """[m
+         async with self.lock:[m
+[31m-            work = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kw))[m
+[32m+[m[32m            work = asyncio.ensure_future([m
+[32m+[m[32m                asyncio.to_thread(measured(self.metrics, op_label(fn, context), fn), *args, **kw)[m
+[32m+[m[32m            )[m
+             try:[m
+                 return await asyncio.shield(work)[m
+             except asyncio.CancelledError:[m
+[1mdiff --git a/src/openswmm_mcp/tools/model.py b/src/openswmm_mcp/tools/model.py[m
+[1mindex 21422e0..1c9e27b 100644[m
+[1m--- a/src/openswmm_mcp/tools/model.py[m
+[1m+++ b/src/openswmm_mcp/tools/model.py[m
+[36m@@ -235,7 +235,8 @@[m [masync def run([m
+ [m
+     until: "end" (run to completion and write the report), an ISO datetime, or[m
+     "+<n>[s|m|h|d]" of simulated time. max_steps caps routing steps for step-wise[m
+[31m-    control. Returns current time, progress, state and, when finished, continuity errors.[m
+[32m+[m[32m    control. Returns current time, progress, state and, when finished, continuity errors,[m
+[32m+[m[32m    plus what the run cost: wall_seconds, cpu_seconds and cpu_cores_used.[m
+     """[m
+     session = await get_session(ctx, session_id)[m
+     solver = session.require_solver()[m
+[36m@@ -254,6 +255,7 @@[m [masync def run([m
+     start, end = await session.call(lambda: (solver.start_datetime, solver.end_datetime))[m
+     total = max((end - start).total_seconds(), 1.0)[m
+     wall, steps = time.monotonic(), 0[m
+[32m+[m[32m    mark = session.metrics.snapshot()[m
+ [m
+     def chunk() -> int:[m
+         n = 0[m
+[36m@@ -277,11 +279,19 @@[m [masync def run([m
+             break[m
+ [m
+     finished = await session.call(lambda: int(solver.state)) not in _ACTIVE[m
+[32m+[m[32m    spent = session.metrics.snapshot().minus(mark)[m
+     out: dict[str, Any] = {[m
+         "session_id": session_id,[m
+         "steps": steps,[m
+         "wall_seconds": round(time.monotonic() - wall, 3),[m
+[32m+[m[32m        # Engine CPU for this run alone; cores_used counts every engine thread.[m
+[32m+[m[32m        "cpu_seconds": round(spent.cpu_seconds, 3),[m
+     }[m
+[32m+[m[32m    cores = spent.cores_used[m
+[32m+[m[32m    if cores is not None:[m
+[32m+[m[32m        out["cpu_cores_used"] = round(cores, 3)[m
+[32m+[m[32m    if session.metrics.peak_rss_mb:[m
+[32m+[m[32m        out["session_peak_rss_mb"] = round(session.metrics.peak_rss_mb, 1)[m
+     if finished:[m
+         await session.call(lambda: (solver.end(), solver.report()), context="finishing")[m
+         await ctx.report_progress(1.0, 1.0)[m
+[36m@@ -325,7 +335,9 @@[m [masync def session([m
+         return {"session_id": session_id, "closed": True}[m
+     source = await sm.get(session_id)[m
+     if action == "state":[m
+[31m-        return await source.call(summary, source)[m
+[32m+[m[32m        state = await source.call(summary, source)[m
+[32m+[m[32m        state["cost"] = source.metrics.as_dict()[m
+[32m+[m[32m        return state[m
+     if action == "reset":[m
+         return await source.call(_reopen, source, context="reset")[m
+     if not new_session_id:[m
+[1mdiff --git a/tests/unit/conftest.py b/tests/unit/conftest.py[m
+[1mindex 4487e59..415fbab 100644[m
+[1m--- a/tests/unit/conftest.py[m
+[1m+++ b/tests/unit/conftest.py[m
+[36m@@ -51,6 +51,8 @@[m [mclass Tools:[m
+ [m
+     def __init__(self, client: Client) -> None:[m
+         self._client = client[m
+[32m+[m[32m        #: The client itself, for the surfaces that are not tools (resources).[m
+[32m+[m[32m        self.client = client[m
+ [m
+     async def __call__(self, tool: str, **arguments: Any) -> Any:[m
+         result = await self._client.call_tool(tool, arguments)[m

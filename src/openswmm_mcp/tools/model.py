@@ -235,7 +235,8 @@ async def run(
 
     until: "end" (run to completion and write the report), an ISO datetime, or
     "+<n>[s|m|h|d]" of simulated time. max_steps caps routing steps for step-wise
-    control. Returns current time, progress, state and, when finished, continuity errors.
+    control. Returns current time, progress, state and, when finished, continuity errors,
+    plus what the run cost: wall_seconds, cpu_seconds and cpu_cores_used.
     """
     session = await get_session(ctx, session_id)
     solver = session.require_solver()
@@ -254,6 +255,7 @@ async def run(
     start, end = await session.call(lambda: (solver.start_datetime, solver.end_datetime))
     total = max((end - start).total_seconds(), 1.0)
     wall, steps = time.monotonic(), 0
+    mark = session.metrics.snapshot()
 
     def chunk() -> int:
         n = 0
@@ -277,11 +279,19 @@ async def run(
             break
 
     finished = await session.call(lambda: int(solver.state)) not in _ACTIVE
+    spent = session.metrics.snapshot().minus(mark)
     out: dict[str, Any] = {
         "session_id": session_id,
         "steps": steps,
         "wall_seconds": round(time.monotonic() - wall, 3),
+        # Engine CPU for this run alone; cores_used counts every engine thread.
+        "cpu_seconds": round(spent.cpu_seconds, 3),
     }
+    cores = spent.cores_used
+    if cores is not None:
+        out["cpu_cores_used"] = round(cores, 3)
+    if session.metrics.peak_rss_mb:
+        out["session_peak_rss_mb"] = round(session.metrics.peak_rss_mb, 1)
     if finished:
         await session.call(lambda: (solver.end(), solver.report()), context="finishing")
         await ctx.report_progress(1.0, 1.0)
@@ -325,7 +335,9 @@ async def session(
         return {"session_id": session_id, "closed": True}
     source = await sm.get(session_id)
     if action == "state":
-        return await source.call(summary, source)
+        state = await source.call(summary, source)
+        state["cost"] = source.metrics.as_dict()
+        return state
     if action == "reset":
         return await source.call(_reopen, source, context="reset")
     if not new_session_id:

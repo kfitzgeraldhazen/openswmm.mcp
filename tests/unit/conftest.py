@@ -51,6 +51,8 @@ class Tools:
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        #: The client itself, for the surfaces that are not tools (resources).
+        self.client = client
 
     async def __call__(self, tool: str, **arguments: Any) -> Any:
         result = await self._client.call_tool(tool, arguments)
