@@ -11,10 +11,7 @@ from openswmm_mcp.dependencies import get_session, get_session_manager
 from openswmm_mcp.metrics import COST_NOTE, process_snapshot
 from openswmm_mcp.tools.model import summary
 
-resources_mcp = FastMCP("resources")
 
-
-@resources_mcp.resource("swmm://catalog")
 async def catalog_index() -> str:
     """Every target the engine exposes, with its class and one-line description."""
     return json.dumps(
@@ -23,7 +20,6 @@ async def catalog_index() -> str:
     )
 
 
-@resources_mcp.resource("swmm://catalog/{target}")
 async def catalog_target(target: str) -> str:
     """Full catalog entries (fields and methods) for one target, e.g. ``node`` or ``forcing``."""
     cat.require_target(target)
@@ -32,7 +28,6 @@ async def catalog_target(target: str) -> str:
     )
 
 
-@resources_mcp.resource("swmm://sessions")
 async def sessions(ctx: Context) -> str:
     """All open sessions with their state and input file."""
     return json.dumps(
@@ -44,14 +39,12 @@ async def sessions(ctx: Context) -> str:
     )
 
 
-@resources_mcp.resource("swmm://session/{session_id}/summary")
 async def session_summary(session_id: str, ctx: Context) -> str:
     """Counts, key options, time window and file paths for one session."""
     session = await get_session(ctx, session_id)
     return json.dumps(await session.call(summary, session), indent=1)
 
 
-@resources_mcp.resource("swmm://metrics")
 async def metrics(ctx: Context) -> str:
     """CPU, wall time and memory used by the server process and by each open session."""
     sessions = await get_session_manager(ctx).sessions()
@@ -65,7 +58,6 @@ async def metrics(ctx: Context) -> str:
     )
 
 
-@resources_mcp.resource("swmm://session/{session_id}/cost")
 async def session_cost(session_id: str, ctx: Context) -> str:
     """One session's CPU, wall time and memory cost, broken down by operation."""
     session = await get_session(ctx, session_id)
@@ -73,3 +65,13 @@ async def session_cost(session_id: str, ctx: Context) -> str:
         {"session_id": session_id, **session.metrics.as_dict(by_op=True), "note": COST_NOTE},
         indent=1,
     )
+
+
+def register_resources(server: FastMCP) -> None:
+    """Register on the root server so resources share the tools' session manager."""
+    server.resource("swmm://catalog")(catalog_index)
+    server.resource("swmm://catalog/{target}")(catalog_target)
+    server.resource("swmm://sessions")(sessions)
+    server.resource("swmm://session/{session_id}/summary")(session_summary)
+    server.resource("swmm://metrics")(metrics)
+    server.resource("swmm://session/{session_id}/cost")(session_cost)
