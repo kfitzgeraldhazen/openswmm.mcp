@@ -1,0 +1,8 @@
+﻿{
+    "Port":  8080,
+    "TunnelId":  "openswmm-936d58ec.use",
+    "TunnelPort":  8080,
+    "Cluster":  "use",
+    "Url":  "https://8tk2vvls.use.devtunnels.ms:8080,",
+    "ExpiresUtc":  "2026-11-08T00:00:00Z"
+}

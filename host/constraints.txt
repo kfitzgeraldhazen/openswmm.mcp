@@ -1,0 +1,30 @@
+# Version pins for the OpenSWMM MCP server stack.
+#
+# These are the versions the API-key setup was verified against on 2026-10-02.
+# setup.cmd passes this file to every pip install with -c, so pip cannot quietly
+# resolve a different stack on a machine that installs later than this one.
+#
+# fastmcp is the pin that matters most: serve_apikey.py imports
+#   fastmcp.server.auth.providers.jwt.StaticTokenVerifier
+# which is a fastmcp-4 path. A resolver that picked up fastmcp 5 would fail the
+# import at startup, before the auth banner, with no obvious connection to pip.
+#
+# openswmm 6.0.0a4.dev1 is a pre-release. pip installs it from this pin alone,
+# without --pre, because the specifier names a pre-release version explicitly.
+# That matters: a global --pre on the command line would let pip pick a
+# pre-release of EVERY package, and it does - a first run of setup.cmd with
+# --pre resolved pydantic 2.14.0b2 instead of the 2.13.5 this was verified on.
+
+openswmm==6.0.0a4.dev1
+
+# The MCP stack, pinned as a set. These versions are known to work together.
+fastmcp==4.0.10
+fastmcp-slim==4.0.10
+mcp==2.2.0
+mcp-types==2.2.0
+
+# Transitive, but pinned because pydantic's beta line is published to PyPI and
+# the resolver will take it under the wrong conditions.
+pydantic==2.13.5
+pydantic-settings==2.15.0
+numpy==2.5.3
